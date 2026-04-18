@@ -44,6 +44,7 @@ AA_API_KEY     = os.environ.get("ARTIFICIAL_ANALYSIS_API_KEY", "")
 CHUTES_API_KEY = os.environ.get("CHUTES_API_KEY", "")
 
 _quality_cache: dict[str, int] = {}
+_quality_src: str = ""        # status message set once after first fetch attempt
 _my_usage: dict = {}
 DEFAULT_QUALITY = 50
 
@@ -536,36 +537,41 @@ class ChutesApp(App):
 
     @work(exclusive=True, group="fetch")
     async def _load(self) -> None:
-        global _quality_cache
+        global _quality_cache, _quality_src
         self._set_status("  Fetching data from chutes.ai...")
-        if not _quality_cache and AA_API_KEY:
-            try:
-                _quality_cache = await fetch_quality_scores()
-            except Exception:
-                pass
-        try:
-            data = await fetch_chutes()
-            self._chutes = data
+        if not _quality_src:  # attempt once per session
+            if AA_API_KEY:
+                try:
+                    _quality_cache = await fetch_quality_scores()
+                    _quality_src = f"[cyan]live scores ({len(_quality_cache)} models)[/]"
+                except httpx.HTTPStatusError as exc:
+                    _quality_src = f"[yellow]quality API {exc.response.status_code} — using fallback[/]"
+                except httpx.RequestError as exc:
+                    _quality_src = f"[yellow]quality fetch failed ({exc.__class__.__name__}) — using fallback[/]"
+            else:
+                _quality_src = "[dim]fallback scores (set ARTIFICIAL_ANALYSIS_API_KEY for live)[/]"
+
+        data = await fetch_chutes()
+        self._chutes = data
+
+        usage_note = ""
+        if CHUTES_API_KEY:
             try:
                 self._usage = await fetch_my_usage()
-            except Exception:
-                pass
-            now = datetime.now().strftime("%H:%M:%S")
-            usable = sum(1 for c in data if c.is_usable)
-            quality_src = (
-                f"[cyan]live scores ({len(_quality_cache)} models)[/]"
-                if _quality_cache else
-                "[dim]fallback scores (set ARTIFICIAL_ANALYSIS_API_KEY for live)[/]"
-            )
-            self._set_status(
-                f"  [green]●[/]  {len(data)} chutes  ·  "
-                f"[green]{usable} usable[/]  ·  "
-                f"{quality_src}  ·  "
-                f"[dim]updated {now}  ·  auto-refresh every {REFRESH_INTERVAL}s[/]"
-            )
-            self._populate()
-        except Exception as exc:
-            self._set_status(f"  [red]✗  Error: {exc}[/]")
+            except httpx.HTTPStatusError as exc:
+                usage_note = f"  [yellow]usage API {exc.response.status_code}[/]"
+            except httpx.RequestError as exc:
+                usage_note = f"  [yellow]usage fetch failed: {exc}[/]"
+
+        now = datetime.now().strftime("%H:%M:%S")
+        usable = sum(1 for c in data if c.is_usable)
+        self._set_status(
+            f"  [green]●[/]  {len(data)} chutes  ·  "
+            f"[green]{usable} usable[/]  ·  "
+            f"{_quality_src}{usage_note}  ·  "
+            f"[dim]updated {now}  ·  auto-refresh every {REFRESH_INTERVAL}s[/]"
+        )
+        self._populate()
 
     def _populate(self) -> None:
         try:
