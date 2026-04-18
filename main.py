@@ -427,7 +427,7 @@ class RankingsTab(Vertical):
         yield Static(
             "[dim]Score = Quality 55% + Availability 45%  "
             "(Availability = 1 - rate-limit% - util%)  "
-            "Showing usable models only[/]",
+            "Models with active instances  ·  [bright_red]RL[/][dim] = heavily rate-limited[/]",
             classes="rank-hint",
         )
         yield DataTable(id="rank-tbl", cursor_type="row", zebra_stripes=True)
@@ -442,27 +442,36 @@ class RankingsTab(Vertical):
         t.add_column("Util %",  width=8)
         t.add_column("Score",   width=18)
         t.add_column("Inst",    width=6)
-        t.add_column("TEE",     width=5)
+        t.add_column("Flags",   width=8)
 
     def populate(self, chutes: list[Chute]) -> None:
         t = self.query_one("#rank-tbl", DataTable)
         t.clear()
 
-        usable = sorted(
-            (c for c in chutes if c.is_usable),
+        ranked = sorted(
+            (c for c in chutes if c.active_instance_count > 0),
             key=lambda c: c.score,
             reverse=True,
         )
 
-        for rank, c in enumerate(usable, 1):
-            if rank == 1:
+        for rank, c in enumerate(ranked, 1):
+            rl = c.rate_limit_ratio_5m >= 0.98
+            if rank == 1 and not rl:
                 rank_sty, name_sty = "bold bright_yellow", "bold bright_green"
-            elif rank <= 3:
+            elif rank <= 3 and not rl:
                 rank_sty, name_sty = "bold bright_green", "bold"
-            elif rank <= 10:
+            elif rank <= 10 and not rl:
                 rank_sty, name_sty = "bold yellow", ""
+            elif rl:
+                rank_sty, name_sty = "dim", "dim"
             else:
                 rank_sty, name_sty = "dim", ""
+
+            flags = Text()
+            if c.tee:
+                flags.append("TEE", style="bold bright_cyan")
+            if rl:
+                flags.append(" RL" if c.tee else "RL", style="bold bright_red")
 
             t.add_row(
                 Text(str(rank),             style=rank_sty, justify="right"),
@@ -473,7 +482,7 @@ class RankingsTab(Vertical):
                 _pct(c.utilization_1h),
                 _score_bar(c.score),
                 Text(str(c.active_instance_count), justify="right"),
-                Text("TEE", style="bold bright_cyan") if c.tee else Text("", style="dim"),
+                flags,
                 key=c.chute_id,
             )
 
