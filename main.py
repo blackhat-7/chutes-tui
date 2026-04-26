@@ -214,12 +214,17 @@ async def fetch_my_usage() -> dict:
     if not CHUTES_API_KEY:
         return {}
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(
-            f"{CHUTES_API_BASE}/users/me/subscription_usage",
-            headers={"Authorization": f"Bearer {CHUTES_API_KEY}"},
-        )
-        r.raise_for_status()
-        return r.json()
+        headers = {"Authorization": f"Bearer {CHUTES_API_KEY}"}
+        sub_r = await client.get(f"{CHUTES_API_BASE}/users/me/subscription_usage", headers=headers)
+        sub_r.raise_for_status()
+        data = sub_r.json()
+        try:
+            quota_r = await client.get(f"{CHUTES_API_BASE}/users/me/quota_usage/*", headers=headers)
+            quota_r.raise_for_status()
+            data["_quota"] = quota_r.json()
+        except Exception:
+            pass
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -281,23 +286,49 @@ class MyUsageBar(Static):
             return
 
         parts: list[str] = ["[bold]My Usage[/]"]
-        for key, val in usage.items():
-            label = key.replace("_", " ").title()
-            if isinstance(val, dict):
-                used = val.get("used") or val.get("usage") or 0
-                cap  = val.get("cap")  or val.get("limit") or 0
-                if cap:
-                    ratio = used / cap
-                    clamped = min(ratio, 1.0)
-                    col = "bright_red" if clamped > 0.85 else ("yellow" if clamped > 0.6 else "bright_green")
-                    bar = "█" * round(clamped * 10) + "░" * (10 - round(clamped * 10))
-                    pct_str = f"OVER ({ratio*100:.0f}%)" if ratio > 1.0 else f"{ratio*100:.0f}%"
-                    parts.append(f"[dim]{label}:[/] [{col}]{bar} {pct_str}[/]")
-                elif used:
-                    parts.append(f"[dim]{label}:[/] [cyan]{used:,}[/]")
-            elif isinstance(val, (int, float)) and val:
-                fmt = f"{val:,.2f}" if isinstance(val, float) else f"{val:,}"
-                parts.append(f"[dim]{label}:[/] [cyan]{fmt}[/]")
+
+        def _bar(used: float, cap: float, label: str) -> str:
+            ratio = used / cap
+            clamped = min(ratio, 1.0)
+            col = "bright_red" if clamped > 0.85 else ("yellow" if clamped > 0.6 else "bright_green")
+            bar = "█" * round(clamped * 10) + "░" * (10 - round(clamped * 10))
+            pct_str = f"OVER ({ratio*100:.0f}%)" if ratio > 1.0 else f"{ratio*100:.0f}%"
+            return f"[dim]{label}:[/] [{col}]{bar} {pct_str}[/]"
+
+        four_hour = usage.get("four_hour") if isinstance(usage.get("four_hour"), dict) else None
+        monthly   = usage.get("monthly")   if isinstance(usage.get("monthly"),   dict) else None
+
+        quota = usage.get("_quota") if isinstance(usage.get("_quota"), dict) else None
+        if quota:
+            q_used = float(quota.get("used") or 0)
+            q_cap  = float(quota.get("quota") or 0)
+            if q_cap:
+                parts.append(_bar(q_used, q_cap, "Daily"))
+
+        if four_hour or monthly:
+            fh_used = float(four_hour.get("usage") or 0) if four_hour else 0.0
+            fh_cap  = float(four_hour.get("cap")   or 0) if four_hour else 0.0
+            mo_used = float(monthly.get("usage")   or 0) if monthly   else 0.0
+            mo_cap  = float(monthly.get("cap")     or 0) if monthly   else 0.0
+
+            if fh_cap:
+                parts.append(_bar(fh_used, fh_cap, "4h"))
+
+            if mo_cap:
+                parts.append(_bar(mo_used, mo_cap, "Monthly"))
+        else:
+            for key, val in usage.items():
+                label = key.replace("_", " ").title()
+                if isinstance(val, dict):
+                    used = val.get("used") or val.get("usage") or 0
+                    cap  = val.get("cap")  or val.get("limit") or 0
+                    if cap:
+                        parts.append(_bar(float(used), float(cap), label))
+                    elif used:
+                        parts.append(f"[dim]{label}:[/] [cyan]{used:,}[/]")
+                elif isinstance(val, (int, float)) and not isinstance(val, bool) and val:
+                    fmt = f"{val:,.2f}" if isinstance(val, float) else f"{val:,}"
+                    parts.append(f"[dim]{label}:[/] [cyan]{fmt}[/]")
 
         self.update("  ·  ".join(parts))
 
