@@ -14,7 +14,9 @@ Terminal dashboard for [chutes.ai](https://chutes.ai) — monitor model utilizat
 ## Setup
 
 ```bash
-uv run main.py
+go build -o chutes-tui . && ./chutes-tui
+# or
+go run .
 ```
 
 **Optional env vars** (create a `.env` file):
