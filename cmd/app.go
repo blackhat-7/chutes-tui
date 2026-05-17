@@ -26,18 +26,19 @@ const (
 )
 
 type appModel struct {
-	activeTab   tab
-	chutes      []model.Chute
-	usage       map[string]any
-	qualitySrc  string
-	status      string
-	width       int
-	height      int
-	loading     bool
-	keys        keyMap
-	help        help.Model
-	aaAPIKey    string
-	chutesKey   string
+	activeTab    tab
+	chutes       []model.Chute
+	usage        map[string]any
+	qualitySrc   string
+	status       string
+	width        int
+	height       int
+	loading      bool
+	qualityDone  bool
+	keys         keyMap
+	help         help.Model
+	aaAPIKey     string
+	chutesKey    string
 }
 
 type keyMap struct {
@@ -91,42 +92,46 @@ func (m appModel) Init() tea.Cmd {
 // Messages
 type tickMsg time.Time
 type fetchedMsg struct {
-	chutes     []model.Chute
-	quality    map[string]int
-	qualitySrc string
-	usage      map[string]any
-	usageErr   string
-	err        error
+	chutes      []model.Chute
+	qualitySrc  string
+	qualityDone bool
+	usage       map[string]any
+	usageErr    string
+	err         error
 }
 
 func (m appModel) fetchData() tea.Cmd {
+	qualityDone := m.qualityDone
 	return func() tea.Msg {
 		var quality map[string]int
 		var qualitySrc string
 		var err error
 
-		// Fetch quality scores (once per session, but we do it each time for simplicity)
-		quality, qualitySrc, err = api.FetchQualityScores(m.aaAPIKey)
-		if err == nil && len(quality) > 0 {
-			model.SetQualityCache(quality)
+		// Quality scores: fetch once per session
+		if !qualityDone {
+			quality, qualitySrc, err = api.FetchQualityScores(m.aaAPIKey)
+			if err == nil && len(quality) > 0 {
+				model.SetQualityCache(quality)
+			}
+			qualityDone = true
 		}
 
 		// Fetch chutes
 		chutes, fetchErr := api.FetchChutes()
 		if fetchErr != nil {
-			return fetchedMsg{err: fetchErr}
+			return fetchedMsg{err: fetchErr, qualityDone: qualityDone}
 		}
 
 		// Fetch usage
 		usage, usageErrStr, _ := api.FetchUsage(m.chutesKey)
 
 		return fetchedMsg{
-			chutes:     chutes,
-			quality:    quality,
-			qualitySrc: qualitySrc,
-			usage:      usage,
-			usageErr:   usageErrStr,
-			err:        err,
+			chutes:      chutes,
+			qualitySrc:  qualitySrc,
+			qualityDone: qualityDone,
+			usage:       usage,
+			usageErr:    usageErrStr,
+			err:         err,
 		}
 	}
 }
@@ -160,6 +165,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case fetchedMsg:
 		m.loading = false
+		m.qualityDone = msg.qualityDone
 		if msg.err != nil {
 			m.status = fmt.Sprintf("  Error: %v", msg.err)
 			return m, nil
